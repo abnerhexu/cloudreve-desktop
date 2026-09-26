@@ -7,6 +7,11 @@
 //! - Uses CrPlaceholder to convert and mark the file as in-sync
 //! - Only operates on hydrated placeholder files
 
+#[cfg(windows)]
+use crate::cfapi::placeholder::LocalFileInfo;
+#[cfg(target_os = "macos")]
+use crate::drive::placeholder::LocalFileInfo;
+
 use std::{
     path::PathBuf,
     str::FromStr,
@@ -23,11 +28,13 @@ use dashmap::DashMap;
 use futures::StreamExt;
 use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
+#[cfg(windows)]
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::{
-    cfapi::placeholder::LocalFileInfo,
+
     drive::{placeholder::CrPlaceholder, utils::local_path_to_cr_uri},
     inventory::{FileMetadata, InventoryDb},
     tasks::queue::QueuedTask,
@@ -209,10 +216,13 @@ impl<'a> DownloadTask<'a> {
 
     /// Execute the download task
     pub async fn execute(&mut self) -> Result<()> {
+        #[cfg(target_os = "macos")]
+        crate::drive::placeholder::validate_path(&self.sync_path, &self.task.payload.local_path)?;
         // Get local file info
         let local_file_info = LocalFileInfo::from_path(&self.task.payload.local_path)
             .context("failed to get local file info")?;
 
+        #[cfg(windows)]
         if !local_file_info.exists {
             info!(
                 target: "tasks::download",
@@ -234,6 +244,7 @@ impl<'a> DownloadTask<'a> {
         }
 
         // Check if file is a placeholder and is hydrated (has content on disk)
+        #[cfg(windows)]
         if !local_file_info.is_placeholder() {
             info!(
                 target: "tasks::download",
@@ -246,6 +257,7 @@ impl<'a> DownloadTask<'a> {
 
         // partial_on_disk means the file content is NOT fully present locally
         // We need the file to be hydrated (NOT partial_on_disk) to replace its content
+        #[cfg(windows)]
         if local_file_info.partial_on_disk() {
             info!(
                 target: "tasks::download",
@@ -256,6 +268,13 @@ impl<'a> DownloadTask<'a> {
             return Ok(());
         }
 
+        #[cfg(target_os = "macos")]
+        {
+            let expected = self.task.payload.custom_state.as_ref().and_then(|v|v.get("macos_expected"))
+                .context("Download is missing its local precondition; run sync again")?;
+            let expected: Option<crate::drive::placeholder::Fingerprint> = serde_json::from_value(expected.clone())?;
+            anyhow::ensure!(local_file_info.snapshot == expected, "Local file changed since download was scheduled");
+        }
         self.local_file_info = Some(local_file_info);
 
         // Get inventory metadata - required for download
@@ -271,6 +290,7 @@ impl<'a> DownloadTask<'a> {
             .context("failed to get inventory meta")?;
 
         // Fail if file is not in inventory - we need the metadata to download
+        #[cfg(windows)]
         if self.inventory_meta.is_none() {
             anyhow::bail!(
                 "File not found in inventory: {}. Cannot download without inventory metadata.",
@@ -345,8 +365,14 @@ impl<'a> DownloadTask<'a> {
         );
 
         // Create temp file for download
+        #[cfg(windows)]
         let temp_dir = std::env::temp_dir();
+        #[cfg(target_os = "macos")]
+        let temp_dir = local_path.parent().context("No parent directory")?.to_path_buf();
+        #[cfg(windows)]
         let temp_file_name = format!("cloudreve_download_{}", self.task.task_id);
+        #[cfg(target_os = "macos")]
+        let temp_file_name = format!(".cloudreve-tmp-{}", Uuid::new_v4());
         let temp_path = temp_dir.join(&temp_file_name);
 
         // Clean up any existing temp file
@@ -420,7 +446,7 @@ impl<'a> DownloadTask<'a> {
         }
 
         // Create temp file
-        let mut file = tokio::fs::File::create(&temp_path)
+        let mut file = tokio::fs::OpenOptions::new().write(true).create_new(true).open(&temp_path)
             .await
             .context("failed to create temp file")?;
 
@@ -451,6 +477,8 @@ impl<'a> DownloadTask<'a> {
         }
 
         file.flush().await.context("failed to flush temp file")?;
+        file.sync_all().await?;
+        anyhow::ensure!(tracker.downloaded() == tracker.total_size, "Incomplete download");
 
         Ok(())
     }
@@ -516,11 +544,13 @@ impl<'a> DownloadTask<'a> {
             }
         }
 
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
         {
-            // On non-Windows, just copy the file
-            std::fs::copy(temp_path, local_path)
-                .context("failed to copy temp file to local path")?;
+            use crate::drive::placeholder::{fingerprint, validate_path};
+            validate_path(&self.sync_path, local_path)?;
+            anyhow::ensure!(fingerprint(local_path)? == self.local_file_info.as_ref().context("Missing precondition")?.snapshot,
+                "Local file changed during download; refusing to overwrite");
+            std::fs::rename(temp_path, local_path).context("Atomic download replacement failed")?;
         }
 
         // Use CrPlaceholder to convert and mark as in-sync

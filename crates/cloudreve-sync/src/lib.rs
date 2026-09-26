@@ -1,9 +1,11 @@
+#[cfg(windows)]
 pub mod cfapi;
 pub mod config;
 pub mod drive;
 pub mod events;
 pub mod inventory;
 pub mod logging;
+#[cfg(windows)]
 pub mod shellext;
 pub mod tasks;
 pub mod uploader;

@@ -8,7 +8,13 @@
   </a>
 </p>
 
-A Windows desktop client for [Cloudreve](https://github.com/cloudreve/Cloudreve) cloud storage, built with Tauri and React. Provides seamless file synchronization using the Windows Cloud Files API.
+A desktop client for [Cloudreve](https://github.com/cloudreve/Cloudreve) cloud storage, built with Tauri and React. Provides seamless file synchronization using the Windows Cloud Files API.
+
+## macOS development preview
+
+A macOS backend for full local-folder synchronization is now available for development.
+See [macOS build instructions and limitations](docs/macos.md). Windows retains its
+Cloud Files API backend. Linux is not supported.
 
 ## Features
 

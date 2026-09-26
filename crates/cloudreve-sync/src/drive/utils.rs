@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use cloudreve_api::models::uri::CrUri;
 use url::Url;
+#[cfg(windows)]
 use widestring::U16CString;
+#[cfg(windows)]
 use windows::Win32::UI::Shell::{SHCNE_ID, SHCNF_PATHW, SHChangeNotify};
 
 use crate::drive::mounts::DriveConfig;
@@ -14,16 +16,11 @@ pub fn local_path_to_cr_uri(path: PathBuf, root: PathBuf, remote_base: String) -
     // Strip the root from path to get the relative path
     let relative = path.strip_prefix(&root).context("Path is not under root")?;
 
-    // Convert to string with forward slashes (for URI compatibility)
-    let relative_str = relative
-        .to_str()
-        .context("Path contains invalid UTF-8")?
-        .replace("\\", "/");
-
-    // Join the relative path to the base URI if not empty
-    if !relative_str.is_empty() {
-        base.join(&relative_str.split("/").collect::<Vec<&str>>());
-    }
+    let components = relative.components().map(|component| match component {
+        std::path::Component::Normal(name) => name.to_str().context("Path contains invalid UTF-8"),
+        _ => anyhow::bail!("Path must stay inside the sync root"),
+    }).collect::<Result<Vec<_>>>()?;
+    base.join(&components);
 
     Ok(base)
 }
@@ -93,6 +90,7 @@ pub fn recycle_bin_url(config: &DriveConfig) -> Result<String> {
 }
 
 // notify_shell_change notify the shell to refresh the file or directory
+#[cfg(windows)]
 pub fn notify_shell_change(path: &PathBuf, event: SHCNE_ID) -> Result<()> {
     let utf16_path = U16CString::from_os_str(path.as_path())?;
     unsafe {

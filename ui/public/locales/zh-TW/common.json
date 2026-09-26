@@ -1,5 +1,21 @@
 {
+  "finder": {
+    "fullLocal": "完整本機同步",
+    "onDemand": "Finder 隨需同步（實驗性）",
+    "signing_required": "目前建置尚不能載入 Finder 擴充功能。你可以繼續使用完整本機同步。",
+    "configuration_incomplete": "此建置尚未設定 Finder 帳號儲存，可繼續使用完整本機同步。",
+    "provider_unavailable": "macOS 目前無法找到 Finder 提供者，可繼續使用完整本機同步。",
+    "component_missing": "目前建置未包含 Finder 元件，可使用完整本機同步。",
+    "unsupported": "Finder 同步需要 macOS。",
+    "setupDescription": "檔案在 Finder 中顯示，開啟時下載；本機修改會上傳至雲端。本機目錄由 Finder 管理，衝突可能需要手動處理。",
+    "removeConfirm": "從 Finder 移除 {{name}}？同步將停止；macOS 會保留已下載及尚未同步的檔案，不刪除雲端檔案。",
+    "preserved": "已移除雲端硬碟，本機檔案保留於 {{path}}。",
+    "removed": "已移除 Finder 雲端硬碟。",
+    "open": "在 Finder 中開啟",
+    "remove": "移除"
+  },
   "addDrive": {
+    "fullLocalSync": "macOS 使用完整本機同步：所選雲端目錄中的檔案都會下載到本機，請預留足夠空間。衝突時會保留本機副本。",
     "title": "新增雲端硬碟",
     "description": "輸入您的 Cloudreve 網站 URL 進行連接",
     "siteUrl": "網站 URL",

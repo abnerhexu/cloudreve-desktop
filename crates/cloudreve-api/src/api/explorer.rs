@@ -512,6 +512,7 @@ impl ExplorerApi for Client {
         let response = self
             .http_client
             .put(&url)
+            .timeout(std::time::Duration::from_secs(self.config.timeout_seconds))
             .header("Authorization", format!("Bearer {}", token))
             .header("Content-Type", "application/octet-stream")
             .body(data)

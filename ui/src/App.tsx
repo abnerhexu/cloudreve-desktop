@@ -45,6 +45,7 @@ function App() {
           <Routes>
             <Route path="/add-drive" element={<AddDrive />} />
             <Route path="/reauthorize/:driveId/:siteUrl/:driveName" element={<AddDrive mode="reauthorize" />} />
+            <Route path="/reauthorize-finder/:driveId/:siteUrl/:driveName" element={<AddDrive mode="reauthorize-finder" />} />
             <Route path="/popup" element={<Popup />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>

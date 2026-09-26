@@ -152,6 +152,18 @@ impl DriveManager {
 
     /// Add a new drive
     pub async fn add_drive(&self, mut config: DriveConfig) -> Result<String> {
+        #[cfg(target_os = "macos")]
+        {
+            config.sync_path = config.sync_path.canonicalize().context("Select an existing sync folder")?;
+            crate::drive::placeholder::validate_path(&config.sync_path, &config.sync_path)?;
+            anyhow::ensure!(config.sync_path.is_dir(), "Sync path must be a directory");
+            let state_dir = Self::get_config_dir()?.canonicalize()?;
+            anyhow::ensure!(!config.sync_path.starts_with(&state_dir) && !state_dir.starts_with(&config.sync_path), "Sync folder must not contain application state");
+            for existing in self.drives.read().await.values() {
+                let other = existing.get_sync_path().await;
+                anyhow::ensure!(!config.sync_path.starts_with(&other) && !other.starts_with(&config.sync_path), "Sync folders must not overlap");
+            }
+        }
         // Fetch favicon if icon_path is not set or doesn't exist
         if config.icon_path.is_none()
             || !config
@@ -514,7 +526,10 @@ impl DriveManager {
         for mount in read_guard.values() {
             let config = mount.config.read().await;
             if let Some(ref sync_root) = config.sync_root_id {
+                #[cfg(windows)]
                 let sync_root_str = sync_root.to_os_string().to_string_lossy().to_string();
+                #[cfg(target_os = "macos")]
+                let sync_root_str = sync_root.clone();
                 if sync_root_str == syncroot_id {
                     drop(config);
                     found_mount = Some(mount);
@@ -592,8 +607,14 @@ impl DriveManager {
             let drive_state = mount.get_status_flags().await;
 
             // Determine drive status
+            #[cfg(target_os = "macos")]
+            let sync_error = mount.last_sync_error.lock().await.clone();
+            #[cfg(windows)]
+            let sync_error: Option<String> = None;
             let status = if drive_state.is_credential_expired() {
                 DriveInfoStatus::CredentialExpired
+            } else if sync_error.is_some() {
+                DriveInfoStatus::SyncError
             } else {
                 if !drive_state.is_event_push_subscribed(){
                     DriveInfoStatus::EventPushLost
@@ -613,6 +634,7 @@ impl DriveManager {
                 enabled: config.enabled,
                 user_id: config.user_id.clone(),
                 status,
+                sync_error,
                 capacity,
             });
         }

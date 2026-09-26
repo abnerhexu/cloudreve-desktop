@@ -109,6 +109,16 @@ impl<'a> UploadTask<'a> {
             return Ok(());
         }
 
+        #[cfg(target_os = "macos")]
+        {
+            placeholder_file.validate()?;
+            let expected = self.task.payload.custom_state.as_ref().and_then(|v|v.get("macos_expected"))
+                .context("Upload is missing its local precondition; run sync again")?;
+            let expected: Option<crate::drive::placeholder::Fingerprint> = serde_json::from_value(expected.clone())?;
+            anyhow::ensure!(placeholder_file.local_file_info.snapshot == expected, "Local file changed since upload was scheduled");
+        }
+
+        #[cfg(windows)]
         if placeholder_file.local_file_info.in_sync()
             && !placeholder_file.local_file_info.is_directory()
         {

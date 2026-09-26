@@ -1,0 +1,35 @@
+name: Desktop checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: yarn
+          cache-dependency-path: ui/yarn.lock
+      - run: npm install --global yarn@1.22.22
+      - run: yarn --cwd ui install --frozen-lockfile
+      - run: npm --prefix ui run build
+      - run: cargo check --locked -p cloudreve-desktop
+      - run: cargo test --locked -p cloudreve-api -p cloudreve-sync -p cloudreve-file-provider --lib
+      - if: runner.os == 'macOS'
+        run: scripts/build-macos-file-provider.sh
+      - if: runner.os == 'macOS'
+        run: npm --prefix ui run tauri -- build --debug --bundles app
+      - if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cloudreve-macOS-development
+          path: target/debug/bundle/macos/Cloudreve.app

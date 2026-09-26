@@ -11,6 +11,13 @@ use uuid::Uuid;
 use crate::inventory::schema::file_metadata::{self, dsl as file_metadata_dsl};
 
 impl InventoryDb {
+    /// Load one drive's baselines, including files absent from both current trees.
+    pub fn query_by_drive(&self, drive: &str) -> Result<Vec<FileMetadata>> {
+        let mut conn = self.connection()?;
+        file_metadata_dsl::file_metadata.filter(file_metadata_dsl::drive_id.eq(drive))
+            .load::<FileMetadataRow>(&mut conn)?.into_iter().map(FileMetadata::try_from).collect()
+    }
+
     pub fn batch_insert(&self, entries: &[MetadataEntry]) -> Result<()> {
         if entries.is_empty() {
             return Ok(());

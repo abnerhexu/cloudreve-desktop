@@ -1,13 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Cloudreve",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "identifier": "cloudreve.desktop",
   "build": {
     "frontendDist": "../ui/dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "yarn run dev",
-    "beforeBuildCommand": "yarn run build"
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
   },
   "app": {
     "windows": [

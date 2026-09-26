@@ -9,10 +9,11 @@ export interface DriveInfo {
   user_id: string;
   remote_path: string
   status: DriveStatus;
+  sync_error?: string;
   capacity?: CapacitySummary;
 }
 
-export type DriveStatus = "active" | "event_push_lost" | "credential_expired";
+export type DriveStatus = "active" | "event_push_lost" | "sync_error" | "credential_expired";
 
 export interface CapacitySummary {
   total: number;

@@ -1,3 +1,4 @@
+import FinderDrives from "./FinderDrives";
 import {
   Alert,
   Box,
@@ -55,6 +56,7 @@ interface DriveInfoResponse {
 export default function DrivesSection() {
   const { t } = useTranslation();
   const [drives, setDrives] = useState<DriveInfo[]>([]);
+  const [finderCount, setFinderCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const isFetchingRef = useRef(false);
   const [editingDriveId, setEditingDriveId] = useState<string | null>(null);
@@ -184,6 +186,7 @@ export default function DrivesSection() {
         return "#4caf50"; // green
       case "event_push_lost":
         return "#ff9800"; // orange
+      case "sync_error":
       case "credential_expired":
         return "#f44336"; // red
       default:
@@ -198,6 +201,8 @@ export default function DrivesSection() {
 
   const getStatusLabel = (status: DriveInfo["status"]) => {
     switch (status) {
+      case "sync_error":
+        return t("settings.driveStatus.syncError", "Sync needs attention");
       case "active":
         return t("settings.driveStatus.active");
       case "event_push_lost":
@@ -218,7 +223,8 @@ export default function DrivesSection() {
 
   return (
     <Box>
-      {drives.length === 0 ? (
+      <FinderDrives onCount={setFinderCount} />
+      {drives.length === 0 ? finderCount === 0 && (
         <Typography variant="body2" color="text.secondary">
           {t("settings.noDrives")}
         </Typography>
@@ -293,7 +299,7 @@ export default function DrivesSection() {
                           variant="caption"
                           sx={{ color: getStatusColor(drive.status) }}
                         >
-                          {getStatusLabel(drive.status)}
+                          {drive.sync_error || getStatusLabel(drive.status)}
                         </Typography>
                       </Box>
                     </Box>

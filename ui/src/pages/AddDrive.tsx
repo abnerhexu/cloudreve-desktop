@@ -1,4 +1,4 @@
-import { Alert, Box, Button, CircularProgress, Container, InputAdornment, Snackbar, Typography } from "@mui/material";
+import { Alert, Box, Button, CircularProgress, Container, InputAdornment, Snackbar, Typography, FormControlLabel, Radio, RadioGroup } from "@mui/material";
 import { openUrl, openPath } from "@tauri-apps/plugin-opener";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from '@tauri-apps/api/core';
@@ -43,7 +43,7 @@ export interface PKCESession {
 }
 
 interface AddDriveProps {
-  mode?: "add" | "reauthorize";
+  mode?: "add" | "reauthorize" | "reauthorize-finder";
 }
 
 function parseDeeplinkUrl(url: string): OAuthCallbackData | null {
@@ -85,9 +85,20 @@ function buildAuthorizeUrl(siteUrl: string, codeChallenge: string, state: string
 export default function AddDrive({ mode = "add" }: AddDriveProps) {
   const { t } = useTranslation();
   const { driveId, siteUrl: encodedSiteUrl, driveName: driveNameQuery } = useParams<{ driveId?: string; siteUrl?: string, driveName: string }>();
-  const isReauthorize = mode === "reauthorize" && driveId && encodedSiteUrl;
+  const isFinderReauthorize = mode === "reauthorize-finder";
+  const isReauthorize = mode !== "add" && driveId && encodedSiteUrl;
   const decodedSiteUrl = encodedSiteUrl ? decodeURIComponent(encodedSiteUrl) : "";
   const isWindows10 = useIsWindows10();
+  const [finderStatus, setFinderStatus] = useState<{available: boolean; reason: string} | null>(null);
+  const [syncMode, setSyncMode] = useState(isFinderReauthorize ? "finder" : "full_local");
+  const finderDomainId = useRef(isFinderReauthorize && driveId ? driveId : crypto.randomUUID());
+  useEffect(() => { invoke<{available: boolean; reason: string}>("file_provider_status").then(setFinderStatus).catch(() => setFinderStatus({available: false, reason: "component_missing"})); }, []);
+  const [fullLocalSync, setFullLocalSync] = useState(false);
+  useEffect(() => {
+    invoke<{ sync_mode: string }>("platform_capabilities")
+      .then((capabilities) => setFullLocalSync(capabilities.sync_mode === "full_local"))
+      .catch(console.error);
+  }, []);
 
   const [siteUrl, setSiteUrl] = useState(isReauthorize ? decodedSiteUrl : "");
   const [loading, setLoading] = useState(false);
@@ -108,17 +119,17 @@ export default function AddDrive({ mode = "add" }: AddDriveProps) {
   useEffect(() => {
     let unlisten: () => void;
     listen<string>('deeplink', (event) => {
-      console.log("Received deeplink event:", event.payload);
+
 
       const callbackData = parseDeeplinkUrl(event.payload);
       if (!callbackData) {
-        console.error("Failed to parse deeplink URL:", event.payload);
+        console.error("Failed to parse authorization callback");
         return;
       }
 
       // Verify state matches current session
       if (!pkceSessionRef.current || callbackData.state !== pkceSessionRef.current.state) {
-        console.error("State mismatch or no active session", pkceSessionRef.current, callbackData);
+        console.error("State mismatch or no active authorization session");
         setError(t("addDrive.errors.stateMismatch"));
         setSnackbarOpen(true);
         return;
@@ -309,7 +320,6 @@ export default function AddDrive({ mode = "add" }: AddDriveProps) {
   const handleFinish = async (e: React.FormEvent) => {
     e.preventDefault();
     setPageState("setting_up");
-    // TODO: Call backend to complete drive setup
 
     let tokens: TokenResponse;
     try {
@@ -334,7 +344,8 @@ export default function AddDrive({ mode = "add" }: AddDriveProps) {
     const cleanSiteUrl = new URL(pkceSessionRef.current!.siteUrl).origin;
 
     try {
-      await invoke('add_drive', {
+      await invoke(isFinderReauthorize ? 'reauthorize_finder_drive' : syncMode === 'finder' ? 'add_finder_drive' : 'add_drive', {
+        domainId: finderDomainId.current,
         config: {
           site_url: cleanSiteUrl,
           access_token: tokens.access_token,
@@ -359,9 +370,19 @@ export default function AddDrive({ mode = "add" }: AddDriveProps) {
   }
 
   const handleOpenDriveAndClose = async () => {
-    const pathToOpen = localPath.endsWith('/') || localPath.endsWith('\\') ? localPath : localPath + '/';
-    await openPath(pathToOpen);
-    await getCurrentWindow().close();
+    try {
+      if (syncMode === 'finder') {
+        const location = await invoke<{path: string}>('finder_drive_location', {domainId: finderDomainId.current});
+        await openPath(location.path);
+      } else {
+        const pathToOpen = localPath.endsWith('/') || localPath.endsWith('\\') ? localPath : localPath + '/';
+        await openPath(pathToOpen);
+      }
+      await getCurrentWindow().close();
+    } catch (error) {
+      setError(String(error));
+      setSnackbarOpen(true);
+    }
   }
 
   return (
@@ -399,6 +420,8 @@ export default function AddDrive({ mode = "add" }: AddDriveProps) {
             }}
           />}
 
+          {pageState === "url_input" && !isReauthorize && fullLocalSync && finderStatus && !finderStatus.available &&
+            <Alert severity="info">{t(`finder.${finderStatus.reason}`)}</Alert>}
           {pageState === "success" ? (
             // Success state - all done!
             <>
@@ -494,7 +517,7 @@ export default function AddDrive({ mode = "add" }: AddDriveProps) {
                 }}
               >
                 <FilledTextField
-                  disabled={mode === "reauthorize"}
+                  disabled={mode !== "add"}
                   fullWidth
                   autoComplete="off"
                   label={t("addDrive.localDriveName")}
@@ -504,8 +527,17 @@ export default function AddDrive({ mode = "add" }: AddDriveProps) {
                   required
                 />
 
-                {!isReauthorize && (
+                {!isReauthorize && fullLocalSync && <>
+                  <RadioGroup value={syncMode} onChange={(_, value) => { setSyncMode(value); setFolderNotEmpty(false); }}>
+                    <FormControlLabel value="full_local" control={<Radio />} label={t("finder.fullLocal")} />
+                    <FormControlLabel value="finder" disabled={!finderStatus?.available} control={<Radio />} label={t("finder.onDemand")} />
+                  </RadioGroup>
+                  {finderStatus && !finderStatus.available && <Alert severity="info">{t(`finder.${finderStatus.reason}`)}</Alert>}
+                  {syncMode === "finder" && <Alert severity="info">{t("finder.setupDescription")}</Alert>}
+                </>}
+                {!isReauthorize && syncMode !== "finder" && (
                   <>
+                    {fullLocalSync && <Alert severity="info">{t("addDrive.fullLocalSync")}</Alert>}
                     <FilledTextField
                       fullWidth
                       autoComplete="off"

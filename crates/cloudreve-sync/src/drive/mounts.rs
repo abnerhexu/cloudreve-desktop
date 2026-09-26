@@ -1,13 +1,16 @@
+#[cfg(windows)]
 use crate::cfapi::root::{
     Connection, HydrationType, PopulationType, SecurityId, Session, SyncRootId, SyncRootIdBuilder,
     SyncRootInfo,
 };
+#[cfg(windows)]
 use crate::drive::callback::CallbackHandler;
 use crate::drive::commands::ManagerCommand;
 use crate::drive::commands::MountCommand;
 use crate::drive::event_blocker::EventBlocker;
 use crate::drive::ignore::IgnoreMatcher;
 use crate::drive::sync::group_fs_events;
+#[cfg(windows)]
 use crate::drive::utils::recycle_bin_url;
 use crate::inventory::{DrivePropsUpdate, InventoryDb, TaskRecord};
 use crate::tasks::{TaskProgress, TaskQueue, TaskQueueConfig};
@@ -18,6 +21,7 @@ use cloudreve_api::api::user::UserApi;
 use cloudreve_api::{Client, ClientConfig, models::user::Token};
 use notify_debouncer_full::notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
+#[cfg(windows)]
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 use std::{
@@ -28,7 +32,9 @@ use std::{
 use tokio::spawn;
 use tokio::sync::{Mutex, RwLock, mpsc};
 use tokio::task::JoinHandle;
+#[cfg(windows)]
 use url::Url;
+#[cfg(windows)]
 use windows::Storage::Provider::StorageProviderSyncRootManager;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DriveConfig {
@@ -45,7 +51,12 @@ pub struct DriveConfig {
     pub user_id: String,
 
     // Windows CFAPI
+    #[cfg(windows)]
     pub sync_root_id: Option<SyncRootId>,
+
+    #[cfg(target_os = "macos")]
+    #[serde(default)]
+    pub sync_root_id: Option<String>,
 
     /// List of gitignore-style patterns for files/directories to ignore during sync
     #[serde(default)]
@@ -127,7 +138,10 @@ impl MountStatusFlags {
 type FsWatcher = Debouncer<RecommendedWatcher, RecommendedCache>;
 
 pub struct Mount {
+    #[cfg(target_os = "macos")]
+    pub last_sync_error: Mutex<Option<String>>,
     pub config: Arc<RwLock<DriveConfig>>,
+    #[cfg(windows)]
     connection: Option<Connection<CallbackHandler>>,
     pub command_tx: mpsc::UnboundedSender<MountCommand>,
     command_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<MountCommand>>>>,
@@ -136,7 +150,7 @@ pub struct Mount {
     remote_event_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     manager_command_tx: mpsc::UnboundedSender<ManagerCommand>,
     fs_watcher: Mutex<Option<FsWatcher>>,
-    pub(crate) sync_lock: Mutex<()>,
+    pub(crate) sync_lock: Arc<Mutex<()>>,
     pub cr_client: Arc<Client>,
     pub inventory: Arc<InventoryDb>,
     pub task_queue: Arc<TaskQueue>,
@@ -239,7 +253,10 @@ impl Mount {
         };
 
         Self {
+            #[cfg(target_os = "macos")]
+            last_sync_error: Mutex::new(None),
             config: Arc::new(RwLock::new(config)),
+            #[cfg(windows)]
             connection: None,
             command_tx,
             command_rx: Arc::new(tokio::sync::Mutex::new(Some(command_rx))),
@@ -248,11 +265,12 @@ impl Mount {
             remote_event_handle: Arc::new(tokio::sync::Mutex::new(None)),
             cr_client: cr_client_arc,
             inventory,
-            task_queue,
+            task_queue: task_queue.clone(),
             id,
             manager_command_tx,
             fs_watcher: Mutex::new(None),
-            sync_lock: Mutex::new(()),
+            // Serialize scans separately from transfer filesystem operations.
+            sync_lock: Arc::new(Mutex::new(())),
             event_blocker: EventBlocker::new(),
             ignore_matcher: RwLock::new(ignore_matcher),
             status_flags: Mutex::new(MountStatusFlags::new()),
@@ -370,6 +388,7 @@ impl Mount {
         self.task_queue.ongoing_progress().await
     }
 
+    #[cfg(windows)]
     pub async fn start(&mut self) -> Result<()> {
         if !StorageProviderSyncRootManager::IsSupported()
             .context("Cloud Filter API is not supported")?
@@ -409,7 +428,10 @@ impl Mount {
             }
             sync_root_info.set_version("1.0.0");
             sync_root_info
-                .set_recycle_bin_uri(recycle_bin_url(&config).unwrap_or_else(|_| "https://cloudreve.org".to_string()))
+                .set_recycle_bin_uri(
+                    recycle_bin_url(&config)
+                        .unwrap_or_else(|_| "https://cloudreve.org".to_string()),
+                )
                 .context("failed to set recycle bin uri")?;
             sync_root_info
                 .set_path(Path::new(&config.sync_path))
@@ -504,12 +526,14 @@ impl Mount {
             tracing::trace!(target: "drive::mounts", id = %mount_id, command = ?command, "Processing command");
 
             match command {
+                #[cfg(windows)]
                 MountCommand::Rename {
                     source,
                     target,
                     response,
                 } => {
                     let s_clone = s.clone();
+                    #[cfg(windows)]
                     let mount_id_clone = mount_id.clone();
                     spawn(async move {
                         let result = s_clone.rename(source, target).await;
@@ -522,9 +546,15 @@ impl Mount {
                         let _ = response.send(result);
                     });
                 }
-                MountCommand::Sync { mode, local_paths, user_initiated } => {
+                MountCommand::Sync {
+                    mode,
+                    local_paths,
+                    user_initiated,
+                } => {
                     let s_clone = s.clone();
+                    #[cfg(windows)]
                     let mount_id_clone = mount_id.clone();
+                    #[cfg(windows)]
                     spawn(async move {
                         match s_clone.sync_paths(local_paths, mode).await {
                             Ok(_) => {
@@ -546,9 +576,18 @@ impl Mount {
                             }
                         }
                     });
+                    #[cfg(target_os = "macos")]
+                    if let Err(error) = s_clone.sync_paths(local_paths, mode).await {
+                        tracing::error!(%error, "macOS reconciliation failed");
+                        if user_initiated {
+                            toast::send_warning_toast("Sync failed", &error.to_string());
+                        }
+                    }
                 }
+                #[cfg(windows)]
                 MountCommand::FetchPlaceholders { path, response } => {
                     let s_clone = s.clone();
+                    #[cfg(windows)]
                     let mount_id_clone = mount_id.clone();
                     spawn(async move {
                         let result = s_clone.fetch_placeholders(path).await;
@@ -582,6 +621,7 @@ impl Mount {
                     tracing::warn!(target: "drive::mounts", id = %mount_id, "Credential invalid, marking as expired");
                     s.set_credential_expired(true).await;
                 }
+                #[cfg(windows)]
                 MountCommand::FetchData {
                     path,
                     ticket,
@@ -589,6 +629,7 @@ impl Mount {
                     response,
                 } => {
                     let s_clone = s.clone();
+                    #[cfg(windows)]
                     let mount_id_clone = mount_id.clone();
                     spawn(async move {
                         let result = s_clone.fetch_data(path, ticket, range).await;
@@ -604,15 +645,22 @@ impl Mount {
                 MountCommand::ProcessFsEvents { events } => {
                     let s_clone = s.clone();
                     //let mount_id_clone = mount_id.clone();
+                    #[cfg(windows)]
                     spawn(async move {
                         let _ = s_clone.process_fs_events(events).await;
                     });
+                    #[cfg(target_os = "macos")]
+                    if let Err(error) = s_clone.process_fs_events(events).await {
+                        tracing::error!(%error, "Local reconciliation failed");
+                    }
                 }
+                #[cfg(windows)]
                 MountCommand::Renamed {
                     source,
                     destination,
                 } => {
                     let s_clone = s.clone();
+                    #[cfg(windows)]
                     let mount_id_clone = mount_id.clone();
                     spawn(async move {
                         if let Err(e) = s_clone.rename_completed(source, destination).await {
@@ -629,10 +677,14 @@ impl Mount {
 
     pub async fn delete(&self) -> Result<()> {
         self.shutdown().await;
+        #[cfg(windows)]
         if let Some(ref connection) = self.connection {
-            connection.disconnect().context("faield to disconnect sync root")?;
+            connection
+                .disconnect()
+                .context("faield to disconnect sync root")?;
         }
         self.task_queue.shutdown().await;
+        #[cfg(windows)]
         if let Some(sync_root_id) = self.config.read().await.sync_root_id.as_ref() {
             if let Err(e) = sync_root_id.unregister() {
                 tracing::warn!(target: "drive::mounts", id=%self.id, error=%e, "Failed to unregister sync root");
@@ -674,7 +726,7 @@ impl Mount {
             tracing::debug!(target: "drive::mounts", id=%self.id, "Stopping props refresh task");
             handle.abort();
         }
-        // self.queue.shutdown().await;
+        self.task_queue.shutdown().await;
     }
 
     /// Spawn the periodic props refresh task
@@ -763,6 +815,7 @@ impl Mount {
     }
 }
 
+#[cfg(windows)]
 fn generate_sync_root_id(
     instance_url: &str,
     _account_name: &str,

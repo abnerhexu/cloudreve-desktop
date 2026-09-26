@@ -1,6 +1,10 @@
+#[cfg(windows)]
+use cloudreve_sync::shellext::shell_service::ServiceHandle;
 use anyhow::Context;
-use cloudreve_sync::{ConfigManager, DriveManager, EventBroadcaster, LogConfig, LogGuard, shellext::shell_service::ServiceHandle};
-use std::sync::{Arc, Mutex};
+use cloudreve_sync::{ConfigManager, DriveManager, EventBroadcaster, LogConfig, LogGuard};
+use std::sync::Arc;
+#[cfg(windows)]
+use std::sync::Mutex;
 use tauri::{
     async_runtime::spawn,
     menu::{Menu, MenuItem},
@@ -12,6 +16,7 @@ use tokio::sync::OnceCell;
 
 use crate::commands::{show_add_drive_window_impl, show_main_window, show_settings_window_impl};
 mod commands;
+mod file_provider;
 mod event_handler;
 
 #[macro_use]
@@ -49,6 +54,7 @@ pub struct AppState {
     log_guard: LogGuard,
     // Keep the shell service handle alive for the entire application lifetime
     #[allow(dead_code)]
+    #[cfg(windows)]
     shell_service: Mutex<ServiceHandle>,
 }
 
@@ -90,10 +96,12 @@ async fn init_sync_service(app: AppHandle) -> anyhow::Result<()> {
         .context("Failed to load drive configurations")?;
 
     // Initialize and start the shell services (context menu handler) in a separate thread
+    #[cfg(windows)]
     let mut shell_service =
         cloudreve_sync::shellext::shell_service::init_and_start_service_task(drive_manager.clone());
 
     // Wait for shell services to initialize
+    #[cfg(windows)]
     if let Err(e) = shell_service.wait_for_init() {
         tracing::error!(target: "main", "Warning: Failed to initialize shell services: {:?}", e);
         tracing::info!(target: "main", "Continuing without context menu handler...");
@@ -109,6 +117,7 @@ async fn init_sync_service(app: AppHandle) -> anyhow::Result<()> {
         drive_manager,
         event_broadcaster: event_broadcaster.clone(),
         log_guard,
+        #[cfg(windows)]
         shell_service: Mutex::new(shell_service),
     };
 
@@ -252,7 +261,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            tracing::info!("a new app instance was opened with {argv:?} and the deep link event was already triggered");
+            tracing::info!("A new app instance was opened");
             if argv.len() > 1 {
                 let _ = app.emit("deeplink", argv[1].clone());
                 show_add_drive_window_impl(app);
@@ -270,10 +279,29 @@ pub fn run() {
             #[cfg(desktop)]
             let _ = app.handle().plugin(tauri_plugin_positioner::init());
 
+            #[cfg(target_os = "macos")]
+            {
+                use tauri_plugin_notification::NotificationExt;
+                app.handle().plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))?;
+                app.handle().plugin(tauri_plugin_notification::init())?;
+                let notification_app = app.handle().clone();
+                cloudreve_sync::utils::toast::set_notification_handler(move |title, body| {
+                    if let Err(error) = notification_app.notification().builder().title(title).body(body).show() {
+                        tracing::warn!(%error, "Unable to show notification");
+                    }
+                });
+                let deep_link_app = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        show_add_drive_window_impl(&deep_link_app);
+                        let _ = deep_link_app.emit("deeplink", url.to_string());
+                    }
+                });
+            }
             // Setup system tray
             setup_tray(app)?;
 
-            #[cfg(desktop)]
+            #[cfg(windows)]
             app.deep_link().register("cloudreve")?;
 
             // Spawn async setup task - this runs in the background
@@ -293,6 +321,14 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::platform_capabilities,
+            file_provider::file_provider_status,
+            file_provider::add_finder_drive,
+            file_provider::reauthorize_finder_drive,
+            file_provider::resume_finder_drive,
+            file_provider::list_finder_drives,
+            file_provider::finder_drive_location,
+            file_provider::remove_finder_drive,
             commands::is_dir_empty,
             commands::list_drives,
             commands::add_drive,
@@ -323,6 +359,10 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|_app_handle, event| {
             match event {
+                #[cfg(target_os = "macos")]
+                RunEvent::Reopen { has_visible_windows: false, .. } => {
+                    commands::show_main_window_center(_app_handle);
+                }
                 RunEvent::ExitRequested { api,code,.. } => {
                      if code.is_none() {
                         api.prevent_exit();

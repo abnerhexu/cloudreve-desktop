@@ -357,7 +357,9 @@ impl Client {
         let url = self.build_url("/session/token/refresh");
         let request = RefreshTokenRequest { refresh_token };
 
-        let response = self.http_client.post(&url).json(&request).send().await?;
+        let response = self.http_client.post(&url)
+            .timeout(std::time::Duration::from_secs(self.config.timeout_seconds))
+            .json(&request).send().await?;
 
         let api_response: ApiResponse<Token> = response.json().await?;
 
@@ -403,7 +405,10 @@ impl Client {
         R: DeserializeOwned + Default,
     {
         let url = self.build_url(path);
-        let mut request = self.http_client.request(method, &url);
+        // A connected proxy/server can stall before headers or during the body.
+        // Bound ordinary requests end-to-end; SSE uses its own streaming request.
+        let mut request = self.http_client.request(method, &url)
+            .timeout(std::time::Duration::from_secs(self.config.timeout_seconds));
 
         // Add authentication header if needed
         if !options.no_credential {
@@ -557,5 +562,36 @@ impl Client {
         R: DeserializeOwned + Default,
     {
         self.send(path, Method::PATCH, Some(body), options).await
+    }
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn connected_but_stalled_response_times_out() {
+        for partial_body in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buffer = [0u8; 4096];
+                socket.read(&mut buffer).await.unwrap();
+                if partial_body {
+                    socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n{").await.unwrap();
+                }
+                std::future::pending::<()>().await;
+            });
+            let mut client = Client::new(ClientConfig::new(url).with_timeout(1));
+            client.http_client = HttpClient::builder().no_proxy().build().unwrap();
+            let result: ApiResult<serde_json::Value> = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                client.get("/probe", RequestOptions::new().no_credential()),
+            ).await.expect("request exceeded its deadline");
+            assert!(matches!(result, Err(ApiError::RequestError(e)) if e.is_timeout()));
+            server.abort();
+        }
     }
 }

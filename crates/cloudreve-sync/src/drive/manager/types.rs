@@ -95,6 +95,7 @@ pub struct DriveInfo {
     pub user_id: String,
     /// Current drive status
     pub status: DriveInfoStatus,
+    pub sync_error: Option<String>,
     /// Capacity summary (None if not available)
     pub capacity: Option<CapacitySummary>,
 }
@@ -107,6 +108,7 @@ pub enum DriveInfoStatus {
     Active,
     // Event push subscription is lost
     EventPushLost,
+    SyncError,
     /// Credentials have expired
     CredentialExpired,
 }

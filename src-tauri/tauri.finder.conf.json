@@ -1,0 +1,10 @@
+{
+  "bundle": {
+    "macOS": {
+      "minimumSystemVersion": "12.3",
+      "files": {
+        "Helpers/CloudreveFinderPreview.app": "../target/debug/file-provider/CloudreveFinderPreview.app"
+      }
+    }
+  }
+}

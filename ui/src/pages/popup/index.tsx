@@ -13,6 +13,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { type as osType } from "@tauri-apps/plugin-os";
 import { useTranslation } from "react-i18next";
 import Settings from "../../common/icons/Settings";
 import CloudreveLogo from "../../common/CloudreveLogo";
@@ -27,8 +28,9 @@ export default function Popup() {
   const [loading, setLoading] = useState(true);
   const isFetchingRef = useRef(false);
 
-  // Close window on blur (when it loses focus)
+  // macOS uses a regular native window; only the Windows tray popup closes on blur.
   useEffect(() => {
+    if (osType() === "macos") return;
     let unlisten: () => void;
     const currentWindow = getCurrentWindow();
 

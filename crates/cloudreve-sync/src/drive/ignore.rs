@@ -82,7 +82,7 @@ impl IgnoreMatcher {
 
         Ok(Self {
             globset,
-            patterns: patterns.to_vec(),
+            patterns: patterns.iter().map(|p|p.trim()).filter(|p|!p.is_empty() && !p.starts_with('#')).map(str::to_string).collect(),
             sync_root,
         })
     }
@@ -166,14 +166,14 @@ impl IgnoreMatcher {
         &self.sync_root
     }
 
-    /// Check if the matcher has any patterns.
+    /// Check if the user configured any patterns (excluding built-in exclusions).
     pub fn is_empty(&self) -> bool {
-        self.globset.is_empty()
+        self.patterns.is_empty()
     }
 
-    /// Get the number of patterns.
+    /// Get the number of configured patterns, excluding built-in exclusions.
     pub fn len(&self) -> usize {
-        self.globset.len()
+        self.patterns.len()
     }
 }
 
@@ -183,49 +183,49 @@ mod tests {
 
     #[test]
     fn test_simple_pattern() {
-        let sync_root = PathBuf::from("C:\\Users\\test\\sync");
+        let sync_root = PathBuf::from("sync");
         let patterns = vec!["*.log".to_string()];
         let matcher = IgnoreMatcher::new(&patterns, sync_root.clone()).unwrap();
 
-        assert!(matcher.is_match("C:\\Users\\test\\sync\\debug.log"));
-        assert!(matcher.is_match("C:\\Users\\test\\sync\\subdir\\error.log"));
-        assert!(!matcher.is_match("C:\\Users\\test\\sync\\readme.txt"));
+        assert!(matcher.is_match(sync_root.join("debug.log")));
+        assert!(matcher.is_match(sync_root.join("subdir/error.log")));
+        assert!(!matcher.is_match(sync_root.join("readme.txt")));
     }
 
     #[test]
     fn test_anchored_pattern() {
-        let sync_root = PathBuf::from("C:\\Users\\test\\sync");
+        let sync_root = PathBuf::from("sync");
         let patterns = vec!["/build".to_string()];
         let matcher = IgnoreMatcher::new(&patterns, sync_root.clone()).unwrap();
 
-        assert!(matcher.is_match("C:\\Users\\test\\sync\\build"));
-        assert!(!matcher.is_match("C:\\Users\\test\\sync\\src\\build"));
+        assert!(matcher.is_match(sync_root.join("build")));
+        assert!(!matcher.is_match(sync_root.join("src/build")));
     }
 
     #[test]
     fn test_directory_pattern() {
-        let sync_root = PathBuf::from("C:\\Users\\test\\sync");
+        let sync_root = PathBuf::from("sync");
         let patterns = vec!["node_modules".to_string()];
         let matcher = IgnoreMatcher::new(&patterns, sync_root.clone()).unwrap();
 
-        assert!(matcher.is_match("C:\\Users\\test\\sync\\node_modules"));
-        assert!(matcher.is_match("C:\\Users\\test\\sync\\project\\node_modules"));
+        assert!(matcher.is_match(sync_root.join("node_modules")));
+        assert!(matcher.is_match(sync_root.join("project/node_modules")));
     }
 
     #[test]
     fn test_path_pattern() {
-        let sync_root = PathBuf::from("C:\\Users\\test\\sync");
+        let sync_root = PathBuf::from("sync");
         let patterns = vec!["docs/*.md".to_string()];
         let matcher = IgnoreMatcher::new(&patterns, sync_root.clone()).unwrap();
 
-        assert!(matcher.is_match("C:\\Users\\test\\sync\\docs\\readme.md"));
-        assert!(matcher.is_match("C:\\Users\\test\\sync\\project\\docs\\api.md"));
-        assert!(!matcher.is_match("C:\\Users\\test\\sync\\readme.md"));
+        assert!(matcher.is_match(sync_root.join("docs/readme.md")));
+        assert!(matcher.is_match(sync_root.join("project/docs/api.md")));
+        assert!(!matcher.is_match(sync_root.join("readme.md")));
     }
 
     #[test]
     fn test_comment_and_empty_lines() {
-        let sync_root = PathBuf::from("C:\\Users\\test\\sync");
+        let sync_root = PathBuf::from("sync");
         let patterns = vec![
             "# This is a comment".to_string(),
             "".to_string(),
@@ -235,22 +235,22 @@ mod tests {
         let matcher = IgnoreMatcher::new(&patterns, sync_root.clone()).unwrap();
 
         assert_eq!(matcher.len(), 1); // Only *.tmp should be added
-        assert!(matcher.is_match("C:\\Users\\test\\sync\\file.tmp"));
+        assert!(matcher.is_match(sync_root.join("file.tmp")));
     }
 
     #[test]
     fn test_path_outside_sync_root() {
-        let sync_root = PathBuf::from("C:\\Users\\test\\sync");
+        let sync_root = PathBuf::from("sync");
         let patterns = vec!["*.log".to_string()];
         let matcher = IgnoreMatcher::new(&patterns, sync_root.clone()).unwrap();
 
         // Path outside sync root should never match
-        assert!(!matcher.is_match("C:\\Other\\path\\debug.log"));
+        assert!(!matcher.is_match("outside/debug.log"));
     }
 
     #[test]
     fn test_relative_path_matching() {
-        let sync_root = PathBuf::from("C:\\Users\\test\\sync");
+        let sync_root = PathBuf::from("sync");
         let patterns = vec!["*.log".to_string(), "/build".to_string()];
         let matcher = IgnoreMatcher::new(&patterns, sync_root).unwrap();
 

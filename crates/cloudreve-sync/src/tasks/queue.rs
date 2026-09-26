@@ -29,6 +29,8 @@ impl Default for TaskQueueConfig {
 }
 
 pub struct TaskQueue {
+    #[cfg(target_os = "macos")]
+    pub filesystem_lock: Arc<Mutex<()>>,
     pub drive_id: String,
     pub cr_client: Arc<Client>,
     pub inventory: Arc<InventoryDb>,
@@ -63,6 +65,8 @@ impl TaskQueue {
 
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let queue = Arc::new(Self {
+            #[cfg(target_os = "macos")]
+            filesystem_lock: Arc::new(Mutex::new(())),
             drive_id,
             inventory,
             cr_client,
@@ -490,6 +494,8 @@ impl TaskQueue {
     }
 
     async fn run_placeholder_task(&self, task: &QueuedTask) -> Result<TaskRunState> {
+        #[cfg(target_os = "macos")]
+        let _guard = self.filesystem_lock.lock().await;
         info!(
             target: "tasks::queue",
             drive = %self.drive_id,

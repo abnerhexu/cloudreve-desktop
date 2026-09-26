@@ -1,19 +1,20 @@
+#[cfg(windows)]
+use tauri::utils::{config::WindowEffectsConfig, WindowEffect};
 use crate::AppStateHandle;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::{Duration, Utc};
 use cloudreve_sync::{
     config::LogLevel, ConfigManager, Credentials, DriveConfig, DriveInfo, StatusSummary,
 };
-#[cfg(target_os = "macos")]
-use tauri::TitleBarStyle;
 use tauri::{
-    utils::{config::WindowEffectsConfig, WindowEffect},
     webview::WebviewWindowBuilder,
     AppHandle, Manager, State, WebviewUrl,
 };
+#[cfg(windows)]
 use tauri_plugin_frame::WebviewWindowExt;
 use tauri_plugin_positioner::{Position, WindowExt};
 use uuid::Uuid;
+#[cfg(windows)]
 use windows::ApplicationModel::{StartupTask, StartupTaskState};
 
 /// Result type for Tauri commands
@@ -344,9 +345,10 @@ fn show_main_window_at_position(app: &AppHandle, position: Position) {
     .inner_size(370.0, 530.0)
     .resizable(false)
     .visible(false)
-    .decorations(false)
-    .skip_taskbar(true)
-    .minimizable(false)
+    // Native macOS decorations include the traffic-light window controls.
+    .decorations(cfg!(target_os = "macos"))
+    .skip_taskbar(!cfg!(target_os = "macos"))
+    .minimizable(cfg!(target_os = "macos"))
     .build()
     {
         Ok(window) => {
@@ -395,7 +397,15 @@ pub async fn show_reauthorize_window(
     drive_id: String,
     site_url: String,
     drive_name: String,
+    finder: Option<bool>,
 ) -> CommandResult<()> {
+    if finder == Some(true) {
+        uuid::Uuid::parse_str(&drive_id).map_err(|_| "Invalid domain ID".to_string())?;
+        let path = format!("index.html/#/reauthorize-finder/{}/{}/{}", drive_id,
+            urlencoding::encode(&site_url), urlencoding::encode(&drive_name));
+        show_drive_window_internal(&app, "Reauthorize Finder Drive", &get_url_with_lang(&path));
+        return Ok(());
+    }
     show_reauthorize_window_impl(&app, &drive_id, &site_url, &drive_name);
     Ok(())
 }
@@ -433,6 +443,7 @@ fn show_drive_window_internal(app: &AppHandle, title: &str, url_path: &str) {
     }
 
     // Create new window with mica effect
+    #[cfg(windows)]
     let effects = WindowEffectsConfig {
         effects: vec![WindowEffect::Mica, WindowEffect::Acrylic],
         state: None,
@@ -445,20 +456,16 @@ fn show_drive_window_internal(app: &AppHandle, title: &str, url_path: &str) {
         .inner_size(470.0, 630.0)
         .resizable(false)
         .visible(false)
-        .transparent(true)
-        .effects(effects)
-        .decorations(false)
-        .minimizable(false);
+        .decorations(cfg!(target_os = "macos"))
+        .minimizable(cfg!(target_os = "macos"));
 
-    // Platform-specific: title_bar_style and hidden_title are macOS-only
-    #[cfg(target_os = "macos")]
-    let builder = builder
-        .title_bar_style(TitleBarStyle::Overlay)
-        .hidden_title(true);
+    #[cfg(windows)]
+    let builder = builder.transparent(true).effects(effects);
 
     match builder.build() {
         Ok(window) => {
             let _ = window.move_window(Position::Center);
+            #[cfg(windows)]
             let _ = window.create_overlay_titlebar();
             let _ = window.show();
             let _ = window.set_focus();
@@ -496,18 +503,13 @@ pub fn show_settings_window_impl(app: &AppHandle) {
     .min_inner_size(600.0, 400.0)
     .visible(false)
     .resizable(true)
-    .decorations(false)
+    .decorations(cfg!(target_os = "macos"))
     .minimizable(true);
-
-    // Platform-specific: title_bar_style and hidden_title are macOS-only
-    #[cfg(target_os = "macos")]
-    let builder = builder
-        .title_bar_style(TitleBarStyle::Overlay)
-        .hidden_title(true);
 
     match builder.build() {
         Ok(window) => {
             let _ = window.move_window(Position::Center);
+            #[cfg(windows)]
             let _ = window.create_overlay_titlebar();
             let _ = window.show();
             let _ = window.set_focus();
@@ -519,9 +521,11 @@ pub fn show_settings_window_impl(app: &AppHandle) {
 }
 
 /// The TaskId defined in AppxManifest.xml for the startup task
+#[cfg(windows)]
 const STARTUP_TASK_ID: &str = "cloudreve";
 
 /// Get whether auto-start is enabled using Windows StartupTask API
+#[cfg(windows)]
 #[tauri::command]
 pub async fn get_auto_start_enabled() -> CommandResult<bool> {
     tokio::task::spawn_blocking(|| {
@@ -545,6 +549,7 @@ pub async fn get_auto_start_enabled() -> CommandResult<bool> {
 }
 
 /// Set auto-start configuration using Windows StartupTask API
+#[cfg(windows)]
 #[tauri::command]
 pub async fn set_auto_start(enabled: bool) -> CommandResult<bool> {
     tokio::task::spawn_blocking(move || {
@@ -691,4 +696,28 @@ pub async fn open_log_folder() -> CommandResult<()> {
 
     showfile::show_path_in_file_manager(format!("{}\\", log_dir.display()));
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub async fn get_auto_start_enabled(app: AppHandle) -> CommandResult<bool> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(|e|e.to_string())
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub async fn set_auto_start(app: AppHandle, enabled: bool) -> CommandResult<bool> {
+    use tauri_plugin_autostart::ManagerExt;
+    if enabled { app.autolaunch().enable() } else { app.autolaunch().disable() }.map_err(|e|e.to_string())?;
+    app.autolaunch().is_enabled().map_err(|e|e.to_string())
+}
+
+#[tauri::command]
+pub fn platform_capabilities() -> serde_json::Value {
+    serde_json::json!({
+        "platform": std::env::consts::OS,
+        "on_demand": cfg!(windows),
+        "sync_mode": if cfg!(windows) { "on_demand" } else { "full_local" }
+    })
 }

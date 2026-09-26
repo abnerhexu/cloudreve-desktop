@@ -78,10 +78,10 @@ path = "examples/select.rs"
 name = "simple"
 path = "examples/simple.rs"
 
-[dependencies.quick-xml]
+[target.'cfg(windows)'.dependencies.quick-xml]
 version = "~0.38"
 
-[dependencies.windows]
+[target.'cfg(windows)'.dependencies.windows]
 version = "~0.62"
 features = [
     "UI_Notifications",
@@ -94,9 +94,9 @@ features = [
     "Foundation_Collections",
 ]
 
-[dependencies.windows-core]
+[target.'cfg(windows)'.dependencies.windows-core]
 version = "~0.62"
 
-[dependencies.windows-registry]
+[target.'cfg(windows)'.dependencies.windows-registry]
 version = "~0.6"
 optional = true

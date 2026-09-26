@@ -1,14 +1,19 @@
 use std::sync::{Arc, OnceLock};
+#[cfg(windows)]
 use windows::ApplicationModel;
 
 static APP_ROOT: OnceLock<Arc<String>> = OnceLock::new();
 
 pub fn init_app_root() {
+    #[cfg(windows)]
     let path = ApplicationModel::Package::Current()
         .and_then(|p| p.InstalledLocation())
         .and_then(|l| l.Path())
         .map(|p| p.to_string())
         .unwrap_or_else(|_| String::new());
+
+    #[cfg(target_os = "macos")]
+    let path = std::env::current_exe().ok().and_then(|p| p.parent().map(|p| p.join("../Resources").to_string_lossy().into_owned())).unwrap_or_default();
 
     APP_ROOT.set(Arc::new(path)).ok();
 }
